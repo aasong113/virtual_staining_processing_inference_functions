@@ -104,7 +104,7 @@ def plot_patch_quadrants(p1, p2, p3, p4, titles=None, row_titles=None, cmap=None
 # Assuming p1, p2, p3, and p4 are defined and contain image data
 # plot_patch_quadrants(p1, p2, p3, p4, titles=["Title1", "Title2", "Title3"], row_titles=["Row Title 1", "Row Title 2", "Row Title 3", "Row Title 4"], cmap='gray')
 
-def create_files_dict(folder):
+def create_files_dict(folder, pattern=None):
     """
     Creates a dictionary mapping:
         key: extracted full patch identifier (img=.._patch_..)
@@ -121,7 +121,7 @@ def create_files_dict(folder):
     files_dict = {}
     for f in files:
         try:
-            key = extract_full_patch_tag(f)
+            key = extract_full_patch_tag(f, pattern=pattern)
             files_dict[key] = f
         except ValueError:
             # skip files that do not match expected pattern
@@ -129,28 +129,106 @@ def create_files_dict(folder):
 
     return files_dict
 
-def extract_full_patch_tag(filename):
+# def extract_full_patch_tag(filename):
+#     base = os.path.splitext(os.path.basename(filename))[0]
+#     m = re.search(r'img=\d+_patch_X=\d+_Y=\d+_Z=\d+_P=\d+', base)
+#     if m:
+#         return m.group(0)
+#     raise ValueError(f"Could not find full patch tag in filename: {filename}")
+
+import os
+import re
+
+def extract_full_patch_tag(filename, pattern=None):
+    """
+    Extract a patch-identifying substring from a filename.
+
+    Parameters
+    ----------
+    filename : str
+        Input filename or path.
+    pattern : str or None
+        Optional regex pattern to search for.
+        Defaults to full patch tag:
+        r'img=\\d+_patch_X=\\d+_Y=\\d+_Z=\\d+_P=\\d+'
+
+    Returns
+    -------
+    str
+        Matched patch tag.
+
+    Raises
+    ------
+    ValueError
+        If no match is found.
+    """
     base = os.path.splitext(os.path.basename(filename))[0]
-    m = re.search(r'img=\d+_patch_X=\d+_Y=\d+_Z=\d+_P=\d+', base)
+
+    if pattern is None:
+        pattern = r'img=\d+_patch_X=\d+_Y=\d+_Z=\d+_P=\d+'
+
+    m = re.search(pattern, base)
     if m:
         return m.group(0)
-    raise ValueError(f"Could not find full patch tag in filename: {filename}")
+
+    raise ValueError(
+        f"Could not find patch tag using pattern '{pattern}' in filename: {filename}"
+    )
 
 
-def get_n_random_patches(n, files_dict1, files_dict2, files_dict3):
-    random_keys = random.sample(list(files_dict1.keys()), n)
+# def get_n_random_patches(n, files_dict1, files_dict2, files_dict3):
+#     random_keys = random.sample(list(files_dict1.keys()), n)
 
-    p1, p2, p3 = [], [], []
+#     p1, p2, p3 = [], [], []
+#     for key in random_keys:
+
+#         print(files_dict1[key])
+#         print(files_dict2[key])
+#         print(files_dict3[key])
+#         p1.append(imread(files_dict1[key]))
+#         p2.append(imread(files_dict2[key]))
+#         p3.append(imread(files_dict3[key]))
+
+#     return p1, p2, p3
+
+import random
+from skimage.io import imread
+
+def get_n_random_patches(n, *files_dicts):
+    """
+    Get `n` random patches from an arbitrary number of file dictionaries.
+
+    Parameters:
+        n (int): Number of random patches to extract.
+        *files_dicts: Variable number of dictionaries mapping keys to image paths.
+
+    Returns:
+        List of lists: Each list contains `n` image patches from one file dictionary.
+                       For example, if there are 3 dictionaries, returns [p1, p2, p3]
+                       where p1[i], p2[i], and p3[i] correspond to the same key.
+    """
+    if not files_dicts:
+        raise ValueError("At least one file dictionary must be provided.")
+
+    # Ensure all dicts have the same keys
+    shared_keys = set(files_dicts[0].keys())
+    for fd in files_dicts[1:]:
+        shared_keys &= set(fd.keys())
+    shared_keys = list(shared_keys)
+
+    if len(shared_keys) < n:
+        raise ValueError(f"Only {len(shared_keys)} shared keys available, but {n} were requested.")
+
+    random_keys = random.sample(shared_keys, n)
+
+    all_patches = [[] for _ in files_dicts]  # Create empty list for each dictionary
+
     for key in random_keys:
+        for i, fd in enumerate(files_dicts):
+            print(fd[key])  # Optional: remove if too verbose
+            all_patches[i].append(imread(fd[key]))
 
-        print(files_dict1[key])
-        print(files_dict2[key])
-        print(files_dict3[key])
-        p1.append(imread(files_dict1[key]))
-        p2.append(imread(files_dict2[key]))
-        p3.append(imread(files_dict3[key]))
-
-    return p1, p2, p3
+    return all_patches
 
 
 
