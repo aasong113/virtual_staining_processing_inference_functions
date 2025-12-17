@@ -458,7 +458,7 @@ def break_image_into_training_patches(img_type, img_num, img_path, img, output_f
 
 ##### Reconstruct Images from Patches
 
-def reconstruct_image_from_patches(metadata_path, patch_folder, return_as_array=False):
+def reconstruct_image_from_patches_preprocess(metadata_path, patch_folder, return_as_array=False):
     """
     Reconstruct the original image from patches using metadata.
     
@@ -678,3 +678,220 @@ def invert_uint8_images(input_folder, output_folder):
             inverted_img = 255 - img
             output_path = os.path.join(output_folder, filename)
             cv2.imwrite(output_path, inverted_img)
+
+
+import os
+import re
+import glob
+import numpy as np
+import tifffile
+from PIL import Image
+
+def reconstruct_image_from_patches_JUST_BIT(metadata_path, patch_folder, img_num, return_as_array=False):
+    """
+    Reconstruct the original image using metadata coordinates (x, y, width, height),
+    loading patches from patch_folder by basename pattern:
+      *img=<img_num>_P=<P>.(png|tif|tiff)  or  *img_<img_num>_P=<P>.(png|tif|tiff)
+
+    The metadata filenames are ignored except for extracting P numbers and coordinates.
+
+    Parameters:
+        metadata_path (str): Path to metadata file.
+        patch_folder (str): Folder containing patch images.
+        img_num (int): Image number to reconstruct (e.g., 23 -> use img=23_P=... or img_23_P=...).
+        return_as_array (bool): If True, return NumPy array; else return PIL.Image.
+
+    Returns:
+        np.ndarray or PIL.Image.Image
+    """
+    # Read metadata file
+    with open(metadata_path, 'r') as f:
+        lines = f.read().splitlines()
+
+    # Parse original size (width, height) from header
+    w = h = None
+    for line in lines:
+        if "Original size:" in line:
+            mw = re.search(r'width=(\d+)', line)
+            mh = re.search(r'height=(\d+)', line)
+            if mw and mh:
+                w = int(mw.group(1)); h = int(mh.group(1))
+            break
+    if w is None or h is None:
+        raise ValueError("Failed to parse Original size (width/height) from metadata.")
+
+    # Collect entries: (P, x, y, pw, ph) from non-comment lines
+    entries = []
+    for line in lines:
+        if line.startswith("#") or not line.strip():
+            continue
+        parts = line.split(',')
+        if len(parts) < 5:
+            continue
+        fname, x, y, pw, ph = parts[0], int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+        mP = re.search(r'P=(\d+)', fname)
+        if not mP:
+            continue
+        P = int(mP.group(1))
+        entries.append((P, x, y, pw, ph))
+    if not entries:
+        raise ValueError("No patch entries found in metadata (no P=... lines).")
+
+    # Helper: find actual file for given img_num and P
+    def find_patch_file(folder, img_num, P):
+        patterns = [
+            f'*img={img_num}_P={P}',
+            f'*img_{img_num}_P={P}',
+        ]
+        for pat in patterns:
+            for ext in ('png', 'tif', 'tiff'):
+                matches = glob.glob(os.path.join(folder, pat + f'.{ext}'))
+                if matches:
+                    return matches[0]
+        # Fallback: any extension if present
+        for pat in patterns:
+            matches = glob.glob(os.path.join(folder, pat + '.*'))
+            if matches:
+                return matches[0]
+        return None
+
+    # Helper: load raw patch as numpy array
+    def load_raw(path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ('.tif', '.tiff'):
+            return tifffile.imread(path)
+        elif ext == '.png':
+            with Image.open(path) as im:
+                return np.array(im)
+        else:
+            raise ValueError(f"Unsupported patch extension: {ext}")
+
+    # Determine mode (color vs gray) from the first available patch
+    first_path = None
+    for P, _, _, _, _ in sorted(entries):
+        pth = find_patch_file(patch_folder, img_num, P)
+        if pth:
+            first_path = pth
+            break
+    if not first_path:
+        raise FileNotFoundError(f"No patch files found for img={img_num} in {patch_folder}.")
+    first_arr = load_raw(first_path)
+    mode = 'color' if (first_arr.ndim == 3 and first_arr.shape[-1] >= 3) else 'gray'
+
+    # Prepare canvas and weight map
+    canvas = np.zeros((h, w, 3), dtype=np.float32) if mode == 'color' else np.zeros((h, w), dtype=np.float32)
+    weight_map = np.zeros((h, w), dtype=np.float32)
+
+    def prepare_patch(raw):
+        # Convert raw array to chosen mode
+        if raw.ndim == 2:
+            gray = raw.astype(np.float32)
+            return np.stack([gray, gray, gray], axis=-1) if mode == 'color' else gray
+        if raw.ndim == 3:
+            c = raw.shape[-1]
+            if c == 1:
+                gray = raw[..., 0].astype(np.float32)
+                return np.stack([gray, gray, gray], axis=-1) if mode == 'color' else gray
+            if c >= 3:
+                rgb = raw[..., :3].astype(np.float32)
+                if mode == 'gray':
+                    return (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]).astype(np.float32)
+                return rgb
+        squeezed = np.squeeze(raw)
+        if squeezed.ndim not in (2, 3):
+            raise ValueError(f"Unsupported patch shape {raw.shape}")
+        return prepare_patch(squeezed)
+
+    used = 0
+    missing = []
+    for P, x, y, pw, ph in entries:
+        patch_path = find_patch_file(patch_folder, img_num, P)
+        if patch_path is None:
+            missing.append(P)
+            continue
+        raw = load_raw(patch_path)
+        patch = prepare_patch(raw)
+
+        H, Wp = (patch.shape[:2] if mode == 'color' else patch.shape)
+        if H < ph or Wp < pw:
+            raise ValueError(f"Patch size {patch.shape} smaller than metadata ({ph}, {pw}) for {patch_path}")
+        if H != ph or Wp != pw:
+            patch = (patch[:ph, :pw, :] if mode == 'color' else patch[:ph, :pw])
+
+        if mode == 'color':
+            canvas[y:y+ph, x:x+pw, :] += patch
+        else:
+            canvas[y:y+ph, x:x+pw] += patch
+        weight_map[y:y+ph, x:x+pw] += 1
+        used += 1
+
+    if missing:
+        raise FileNotFoundError(f"Missing patches for img={img_num}, P values: {missing}")
+    if used == 0:
+        raise ValueError(f"No patches were used for reconstruction for img={img_num}.")
+
+    # Normalize and finalize
+    if mode == 'color':
+        reconstructed = canvas / weight_map[..., None]
+        reconstructed = np.clip(reconstructed, 0, 255).astype(np.uint8)
+        return reconstructed if return_as_array else Image.fromarray(reconstructed, mode='RGB')
+    else:
+        reconstructed = canvas / weight_map
+        reconstructed = np.clip(reconstructed, 0, 255).astype(np.uint8)
+        return reconstructed if return_as_array else Image.fromarray(reconstructed, mode='L')
+    
+
+import os
+import re
+
+def count_unique_img_indices(folder):
+    """
+    Scan a folder and return:
+      - set of unique image indices (from 'img=NN' or 'img_NN')
+      - count of unique indices
+      - dict mapping each index -> set of unique base names up to img=NN/img_NN
+      - list of unique base names (deduped), e.g., '..._img=4'
+
+    Example filenames:
+      crypts_..._img=0_P=1.png
+      crypts_..._img=0_P=2.tif
+      crypts_..._img=4_P=6.png
+
+    Unique base names:
+      crypts_..._img=0
+      crypts_..._img=4
+    """
+    # Match img index (img=NN or img_NN)
+    idx_pattern = re.compile(r'img[=_](\d+)')
+    # Capture base up to img=NN/img_NN
+    base_pattern = re.compile(r'^(.*?img[=_]\d+)')
+
+    img_indices = set()
+    names_by_index = {}  # int -> set[str]
+
+    for fname in os.listdir(folder):
+        path = os.path.join(folder, fname)
+        if not os.path.isfile(path):
+            continue
+
+        m_idx = idx_pattern.search(fname)
+        if not m_idx:
+            continue
+
+        idx = int(m_idx.group(1))
+        img_indices.add(idx)
+
+        m_base = base_pattern.match(fname)
+        if m_base:
+            base_name = m_base.group(1)  # e.g., 'crypts_..._img=4'
+            names_by_index.setdefault(idx, set()).add(base_name)
+
+    # Flat list of unique base names (sorted for reproducibility)
+    unique_base_names = sorted({b for bases in names_by_index.values() for b in bases})
+    return img_indices, len(img_indices), names_by_index, unique_base_names
+
+# Example usage:
+# indices, count, names_map, unique_names = count_unique_img_indices("/path/to/folder")
+# print(indices, count)
+# print(unique_names)            # ['..._img=0', '..._img=4']
+# print(names_map.get(0, set())) # {'..._img=0'}

@@ -1139,3 +1139,65 @@ def plot_patch_quadrants(p1, p2, p3, p4, titles=None, row_titles=None, cmap=None
 # Example usage
 # Assuming p1, p2, p3, and p4 are defined and contain image data
 # plot_patch_quadrants(p1, p2, p3, p4, titles=["Title1", "Title2", "Title3"], row_titles=["Row Title 1", "Row Title 2", "Row Title 3", "Row Title 4"], cmap='gray')
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+def plot_patch_rows(*rows, titles=None, row_titles=None, cmap=None):
+    """
+    Plot patches from p lists in a p-row by n-column grid.
+
+    Args:
+        *rows: Any number (p) of lists of np.ndarray. All lists must have same length (n).
+        titles (list[str] or None): Column titles (length n), shown on the first row.
+        row_titles (list[str] or None): Row titles (length p), shown on the first column of each row.
+        cmap (str or None): Colormap. If None, defaults to 'gray' for 2D or 1-channel images.
+    """
+    p = len(rows)
+    if p == 0:
+        raise ValueError("Provide at least one list of patches.")
+    lengths = [len(r) for r in rows]
+    if len(set(lengths)) != 1:
+        raise AssertionError("All patch lists must have the same length.")
+    n = lengths[0]
+    if titles is not None and len(titles) != n:
+        raise AssertionError("titles must have length equal to the number of columns.")
+    if row_titles is not None and len(row_titles) != p:
+        raise AssertionError("row_titles must have length equal to the number of rows.")
+
+    fig, axes = plt.subplots(p, n, figsize=(3 * n, 3 * p))
+    axes = np.array(axes)
+    if p == 1:
+        axes = axes.reshape(1, n)
+    elif n == 1:
+        axes = axes.reshape(p, 1)
+
+    for r, patches in enumerate(rows):
+        for i in range(n):
+            ax = axes[r, i]
+            patch = patches[i]
+
+            # Determine colormap and handle grayscale
+            if cmap is not None:
+                use_cmap = cmap
+            elif patch.ndim == 2:
+                use_cmap = 'gray'
+            elif patch.ndim == 3 and patch.shape[-1] == 1:
+                patch = patch.squeeze(-1)
+                use_cmap = 'gray'
+            else:
+                use_cmap = None
+
+            ax.imshow(patch, cmap=use_cmap)
+            ax.axis('off')
+
+            # Column titles on first row
+            if r == 0 and titles is not None:
+                ax.set_title(titles[i], fontsize=10)
+
+        # Row titles on first column of each row
+        if row_titles is not None:
+            axes[r, 0].set_title(row_titles[r], fontsize=12, pad=10)
+
+    plt.tight_layout()
+    plt.show()
