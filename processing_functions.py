@@ -15,6 +15,43 @@ from skimage.transform import resize
 ########### Data processing
 
 
+def compute_optimal_stride(img_shape, patch_size, overlap_percent=0.10):
+    """
+    Computes the optimal stride (x, y) for given image shape and patch size
+    to achieve the desired overlap and ensure full coverage.
+
+    Args:
+        img_shape (tuple): (height, width) of the image
+        patch_size (int): size of the square patch
+        overlap_percent (float): desired fractional overlap (e.g., 0.1 for 10%)
+
+    Returns:
+        tuple: (x_stride, y_stride)
+    """
+    import math
+
+    h, w = img_shape
+
+    # Initial stride from overlap percentage
+    stride = int(patch_size * (1 - overlap_percent))
+    stride = max(1, stride)
+
+    # Compute number of patches along height and width (round up to ensure coverage)
+    n_patches_y = math.ceil((h - patch_size) / stride) + 1
+    n_patches_x = math.ceil((w - patch_size) / stride) + 1
+
+    # Recompute stride so that last patch ends exactly at (h - patch_size) and (w - patch_size)
+    if n_patches_y > 1:
+        y_stride = (h - patch_size) // (n_patches_y - 1)
+    else:
+        y_stride = 0
+
+    if n_patches_x > 1:
+        x_stride = (w - patch_size) // (n_patches_x - 1)
+    else:
+        x_stride = 0
+
+    return y_stride, x_stride
 
 def downsample_images_any_dtype(input_dir, output_dir, factor=4):
     """
