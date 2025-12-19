@@ -10,48 +10,187 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import random
 from skimage.transform import resize
+import shutil
+
+
+
 
 
 ########### Data processing
 
-
-def compute_optimal_stride(img_shape, patch_size, overlap_percent=0.10):
+def move_n_random_images(src_folder, dst_folder, n, extensions=('.png', '.jpg', '.jpeg', '.tif', '.tiff')):
     """
-    Computes the optimal stride (x, y) for given image shape and patch size
-    to achieve the desired overlap and ensure full coverage.
+    Moves n random image files from src_folder to dst_folder.
+
+    Parameters:
+    - src_folder: Path to the folder containing images to move
+    - dst_folder: Path to the destination folder
+    - n: Number of images to move
+    - extensions: Tuple of image file extensions to look for
+    """
+    os.makedirs(dst_folder, exist_ok=True)
+
+    # Get all image files in the source folder
+    image_files = [f for f in os.listdir(src_folder) if f.lower().endswith(extensions)]
+
+    if n > len(image_files):
+        raise ValueError(f"Requested {n} images, but only found {len(image_files)}.")
+
+    # Select n random images
+    selected_files = random.sample(image_files, n)
+
+    # Move each selected image
+    for filename in selected_files:
+        src_path = os.path.join(src_folder, filename)
+        dst_path = os.path.join(dst_folder, filename)
+        shutil.move(src_path, dst_path)
+        print(f"Moved: {filename}")
+
+def load_crop_parameters(filename):
+    crop_params = {}
+    with open(filename, "r") as f:
+        for line in f:
+            if '=' in line:
+                key, value = line.strip().strip(';').split('=')
+                crop_params[key.strip()] = int(value.strip())
+
+    top_left = (crop_params['x_start'], crop_params['y_start'])
+    bottom_right = (crop_params['x_end'], crop_params['y_end'])
+    return top_left, bottom_right
+
+def remove_images_with_saturated_pixels(folder_path: str, threshold: float = 1/9):
+    """
+    Removes images if more than `threshold` proportion of their pixels are saturated (255).
+    Prints number of removed images.
+    """
+    removed_files = []
+    
+    for fname in os.listdir(folder_path):
+        if not fname.lower().endswith(('.png', '.jpg', '.jpeg', '.tif')):
+            continue
+
+        path = os.path.join(folder_path, fname)
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            print(f"Could not read image: {fname}")
+            continue
+
+        # Convert to grayscale if needed
+        if img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        total_pixels = img.size
+        num_saturated = np.sum(img == 255)
+        frac_saturated = num_saturated / total_pixels
+
+        if frac_saturated > threshold:
+            os.remove(path)
+            removed_files.append(fname)
+            print(f"Removed (saturated): {fname} — {frac_saturated:.2%} saturated")
+
+    print(f"\nTotal saturated images removed: {len(removed_files)}")
+    return removed_files
+
+
+def remove_images_with_black_pixels(folder_path: str, threshold: float = 1/9):
+    """
+    Removes images if more than `threshold` proportion of their pixels are black (0).
+    Prints number of removed images.
+    """
+    removed_files = []
+    
+    for fname in os.listdir(folder_path):
+        if not fname.lower().endswith(('.png', '.jpg', '.jpeg', '.tif')):
+            continue
+
+        path = os.path.join(folder_path, fname)
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            print(f"Could not read image: {fname}")
+            continue
+
+        # Convert to grayscale if needed
+        if img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        total_pixels = img.size
+        num_black = np.sum(img == 0)
+        frac_black = num_black / total_pixels
+
+        if frac_black > threshold:
+            os.remove(path)
+            removed_files.append(fname)
+            print(f"Removed (black): {fname} — {frac_black:.2%} black")
+
+    print(f"\nTotal black images removed: {len(removed_files)}")
+    return removed_files
+
+
+def normalize_and_save_uint8_images(image_folder, stats_txt_path, output_folder, pattern='*.tif'):
+    """
+    Normalize each image using mean/std from a text file and save as uint8 TIFFs.
+
+    Parameters:
+        image_folder (str): Path to input images.
+        stats_txt_path (str): Path to 'image_stats.txt' file with mean/std.
+        output_folder (str): Folder to save normalized uint8 images.
+        pattern (str): File pattern (e.g., '*.tif').
+    """
+    # Load mean and std
+    with open(stats_txt_path, 'r') as f:
+        lines = f.readlines()
+    mean = float(lines[0].split(':')[1].strip())
+    std = float(lines[1].split(':')[1].strip())
+
+    # Make output folder
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Get image paths
+    image_paths = glob.glob(os.path.join(image_folder, pattern))
+    if not image_paths:
+        raise ValueError(f"No files found in {image_folder} matching {pattern}")
+
+    for path in image_paths:
+        # Load and normalize
+        img_np = tifffile.imread(path).astype(np.float32)
+        norm_img = (img_np - mean) / std
+
+        # Optional: clip to range for robustness (e.g., [-3σ, +3σ])
+        norm_img_clipped = np.clip(norm_img, -3, 3)
+
+        # Rescale to 0–255 and convert to uint8
+        norm_img_scaled = (norm_img_clipped - norm_img_clipped.min()) / (norm_img_clipped.max() - norm_img_clipped.min() + 1e-8)
+        norm_img_uint8 = (norm_img_scaled * 255).astype(np.uint8)
+
+        # Save as uint8 TIFF
+        save_path = os.path.join(output_folder, os.path.basename(path))
+        tifffile.imwrite(save_path, norm_img_uint8)
+
+    print(f"✅ Saved {len(image_paths)} normalized images as uint8 TIFFs to: {output_folder}")
+
+def crop_image(img: np.ndarray, top_left: tuple, bottom_right: tuple) -> np.ndarray:
+    """
+    Crop a rectangular region from the image using top-left and bottom-right coordinates.
 
     Args:
-        img_shape (tuple): (height, width) of the image
-        patch_size (int): size of the square patch
-        overlap_percent (float): desired fractional overlap (e.g., 0.1 for 10%)
+        img (np.ndarray): Input image (2D grayscale or 3D color).
+        top_left (tuple): (x1, y1) coordinates of the top-left corner.
+        bottom_right (tuple): (x2, y2) coordinates of the bottom-right corner.
 
     Returns:
-        tuple: (x_stride, y_stride)
+        np.ndarray: Cropped image.
     """
-    import math
+    x1, y1 = top_left
+    x2, y2 = bottom_right
 
-    h, w = img_shape
+    # Ensure coordinates are within bounds
+    x1, x2 = max(0, x1), min(img.shape[1], x2)
+    y1, y2 = max(0, y1), min(img.shape[0], y2)
 
-    # Initial stride from overlap percentage
-    stride = int(patch_size * (1 - overlap_percent))
-    stride = max(1, stride)
+    return img[y1:y2, x1:x2]
 
-    # Compute number of patches along height and width (round up to ensure coverage)
-    n_patches_y = math.ceil((h - patch_size) / stride) + 1
-    n_patches_x = math.ceil((w - patch_size) / stride) + 1
 
-    # Recompute stride so that last patch ends exactly at (h - patch_size) and (w - patch_size)
-    if n_patches_y > 1:
-        y_stride = (h - patch_size) // (n_patches_y - 1)
-    else:
-        y_stride = 0
 
-    if n_patches_x > 1:
-        x_stride = (w - patch_size) // (n_patches_x - 1)
-    else:
-        x_stride = 0
-
-    return y_stride, x_stride
 
 def downsample_images_any_dtype(input_dir, output_dir, factor=4):
     """
@@ -136,7 +275,7 @@ def extract_patch_key(filename):
     match = re.search(r'img=\d+_patch_X=\d+_Y=\d+_Z=\d+_P=\d+', filename)
     return match.group(0) if match else None
 
-def combine_trios_to_rgb(bit_folder, blue_folder, green_folder, output_folder):
+def combine_trios_to_rgb(bit_folder,green_folder, blue_folder, output_folder):
     """
     Combines matching BIT, MUSE_Blue, and MUSE_Green images into RGB and saves them.
 
@@ -173,7 +312,7 @@ def combine_trios_to_rgb(bit_folder, blue_folder, green_folder, output_folder):
         blue_img = tifffile.imread(blue_dict[key]).astype(np.uint8)
 
         # Stack into RGB: (H, W, 3)
-        rgb_img = np.stack([bit_img, blue_img, green_img], axis=-1)
+        rgb_img = np.stack([bit_img, green_img, blue_img], axis=-1)
 
         # Save output
         out_name = f"MUSE_BIT_{key}.tif"
@@ -412,21 +551,25 @@ def flatfield_correct(image, sigma=50):
     corrected = image / (blurred + 1e-8)  # avoid division by zero
     return corrected
 
-def break_image_into_training_patches(img_type, img_num, img_path, img, output_folder, patch_size, step_size, n_random=0, seed=42):
+def break_image_into_training_patches(img_type, img_num, img_path, img, output_folder, patch_size,
+                                      x_step_size, y_step_size, n_random=0, seed=42):
     """
-    Break an image into patches and save metadata for later stitching. Also samples n_random additional full patches.
+    Break an image into patches and save metadata for reconstruction. Supports custom x and y step sizes.
 
     Parameters:
+        img_type (str): Identifier for the image type
+        img_num (int or str): Image number
         img_path (str): Path to the input image
         img (PIL.Image or np.ndarray): Loaded image
         output_folder (str): Folder to save patches and metadata
-        patch_size (int): Size of each square patch
-        step_size (int): Stride between patches
+        patch_size (int): Size of each square patch (patch is patch_size x patch_size)
+        x_step_size (int): Horizontal stride between patches
+        y_step_size (int): Vertical stride between patches
         n_random (int): Number of additional random patches to extract
         seed (int): Random seed for reproducibility
     """
     os.makedirs(output_folder, exist_ok=True)
-    
+
     base_name = os.path.basename(img_path)
     
     # Parse X, Y, Z coordinates from filename if available
@@ -434,19 +577,20 @@ def break_image_into_training_patches(img_type, img_num, img_path, img, output_f
     for part in base_name.split('_'):
         if '=' in part:
             k, v = part.split('=')
-            coords[k] = v.split('.')[0]  # remove extension
-    
-    img_np = np.array(img)
-    n_channels = 1 if img_np.ndim == 2 else img_np.shape[2]
-    h, w = img_np.shape[:2]
+            coords[k] = v.split('.')[0]
 
+    img_np = np.array(img)
+    if img_np.ndim == 3 and img_np.shape[2] > 1:
+        raise ValueError("This function currently only supports single-channel (grayscale) images.")
+    
+    h, w = img_np.shape[:2]
     patch_counter = 1
     patch_info_list = []
-
-    # Step 1: Grid-based patches
     taken_coords = set()
-    for y in range(0, h - patch_size + 1, step_size):
-        for x in range(0, w - patch_size + 1, step_size):
+
+    # Step 1: Regular grid patches
+    for y in range(0, h - patch_size + 1, y_step_size):
+        for x in range(0, w - patch_size + 1, x_step_size):
             patch = img_np[y:y+patch_size, x:x+patch_size]
             patch_name = f"{img_type}_img={img_num}_patch_X={coords.get('X','0')}_Y={coords.get('Y','0')}_Z={coords.get('Z','0')}_P={patch_counter}.tif"
             patch_path = os.path.join(output_folder, patch_name)
@@ -456,7 +600,7 @@ def break_image_into_training_patches(img_type, img_num, img_path, img, output_f
             taken_coords.add((x, y))
             patch_counter += 1
 
-    # Step 2: Random patches
+    # Step 2: Add optional random patches
     random.seed(seed)
     max_x = w - patch_size
     max_y = h - patch_size
@@ -465,9 +609,8 @@ def break_image_into_training_patches(img_type, img_num, img_path, img, output_f
         x = random.randint(0, max_x)
         y = random.randint(0, max_y)
 
-        # Only include if not already in grid patches
-        grid_x = (x // step_size) * step_size
-        grid_y = (y // step_size) * step_size
+        grid_x = (x // x_step_size) * x_step_size
+        grid_y = (y // y_step_size) * y_step_size
         if (grid_x, grid_y) not in taken_coords:
             patch = img_np[y:y+patch_size, x:x+patch_size]
             patch_name = f"{img_type}_img={img_num}_patch_X={coords.get('X','0')}_Y={coords.get('Y','0')}_Z={coords.get('Z','0')}_P={patch_counter}.tif"
@@ -478,14 +621,14 @@ def break_image_into_training_patches(img_type, img_num, img_path, img, output_f
             patch_counter += 1
         attempts += 1
 
-    # Save metadata
+    # Step 3: Save metadata file
     metadata_file = os.path.join(output_folder, f"{base_name}_patches_stitch_metadata.txt")
     with open(metadata_file, "w") as f:
         f.write(f"# Original image: {base_name}\n")
         f.write(f"# Original size: width={w}, height={h}\n")
         f.write(f"# Patch size: {patch_size}\n")
-        f.write(f"# Step size: {step_size}\n")
-        f.write(f"# Channels: {n_channels}\n")
+        f.write(f"# Step size: x={x_step_size}, y={y_step_size}\n")
+        f.write(f"# Channels: 1\n")
         f.write("# Format: patch_filename,x,y,width,height\n")
         for info in patch_info_list:
             f.write(info + "\n")
@@ -495,7 +638,7 @@ def break_image_into_training_patches(img_type, img_num, img_path, img, output_f
 
 ##### Reconstruct Images from Patches
 
-def reconstruct_image_from_patches_preprocess(metadata_path, patch_folder, return_as_array=False):
+def reconstruct_image_from_patches(metadata_path, patch_folder, return_as_array=False):
     """
     Reconstruct the original image from patches using metadata.
     
@@ -715,220 +858,3 @@ def invert_uint8_images(input_folder, output_folder):
             inverted_img = 255 - img
             output_path = os.path.join(output_folder, filename)
             cv2.imwrite(output_path, inverted_img)
-
-
-import os
-import re
-import glob
-import numpy as np
-import tifffile
-from PIL import Image
-
-def reconstruct_image_from_patches_JUST_BIT(metadata_path, patch_folder, img_num, return_as_array=False):
-    """
-    Reconstruct the original image using metadata coordinates (x, y, width, height),
-    loading patches from patch_folder by basename pattern:
-      *img=<img_num>_P=<P>.(png|tif|tiff)  or  *img_<img_num>_P=<P>.(png|tif|tiff)
-
-    The metadata filenames are ignored except for extracting P numbers and coordinates.
-
-    Parameters:
-        metadata_path (str): Path to metadata file.
-        patch_folder (str): Folder containing patch images.
-        img_num (int): Image number to reconstruct (e.g., 23 -> use img=23_P=... or img_23_P=...).
-        return_as_array (bool): If True, return NumPy array; else return PIL.Image.
-
-    Returns:
-        np.ndarray or PIL.Image.Image
-    """
-    # Read metadata file
-    with open(metadata_path, 'r') as f:
-        lines = f.read().splitlines()
-
-    # Parse original size (width, height) from header
-    w = h = None
-    for line in lines:
-        if "Original size:" in line:
-            mw = re.search(r'width=(\d+)', line)
-            mh = re.search(r'height=(\d+)', line)
-            if mw and mh:
-                w = int(mw.group(1)); h = int(mh.group(1))
-            break
-    if w is None or h is None:
-        raise ValueError("Failed to parse Original size (width/height) from metadata.")
-
-    # Collect entries: (P, x, y, pw, ph) from non-comment lines
-    entries = []
-    for line in lines:
-        if line.startswith("#") or not line.strip():
-            continue
-        parts = line.split(',')
-        if len(parts) < 5:
-            continue
-        fname, x, y, pw, ph = parts[0], int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
-        mP = re.search(r'P=(\d+)', fname)
-        if not mP:
-            continue
-        P = int(mP.group(1))
-        entries.append((P, x, y, pw, ph))
-    if not entries:
-        raise ValueError("No patch entries found in metadata (no P=... lines).")
-
-    # Helper: find actual file for given img_num and P
-    def find_patch_file(folder, img_num, P):
-        patterns = [
-            f'*img={img_num}_P={P}',
-            f'*img_{img_num}_P={P}',
-        ]
-        for pat in patterns:
-            for ext in ('png', 'tif', 'tiff'):
-                matches = glob.glob(os.path.join(folder, pat + f'.{ext}'))
-                if matches:
-                    return matches[0]
-        # Fallback: any extension if present
-        for pat in patterns:
-            matches = glob.glob(os.path.join(folder, pat + '.*'))
-            if matches:
-                return matches[0]
-        return None
-
-    # Helper: load raw patch as numpy array
-    def load_raw(path):
-        ext = os.path.splitext(path)[1].lower()
-        if ext in ('.tif', '.tiff'):
-            return tifffile.imread(path)
-        elif ext == '.png':
-            with Image.open(path) as im:
-                return np.array(im)
-        else:
-            raise ValueError(f"Unsupported patch extension: {ext}")
-
-    # Determine mode (color vs gray) from the first available patch
-    first_path = None
-    for P, _, _, _, _ in sorted(entries):
-        pth = find_patch_file(patch_folder, img_num, P)
-        if pth:
-            first_path = pth
-            break
-    if not first_path:
-        raise FileNotFoundError(f"No patch files found for img={img_num} in {patch_folder}.")
-    first_arr = load_raw(first_path)
-    mode = 'color' if (first_arr.ndim == 3 and first_arr.shape[-1] >= 3) else 'gray'
-
-    # Prepare canvas and weight map
-    canvas = np.zeros((h, w, 3), dtype=np.float32) if mode == 'color' else np.zeros((h, w), dtype=np.float32)
-    weight_map = np.zeros((h, w), dtype=np.float32)
-
-    def prepare_patch(raw):
-        # Convert raw array to chosen mode
-        if raw.ndim == 2:
-            gray = raw.astype(np.float32)
-            return np.stack([gray, gray, gray], axis=-1) if mode == 'color' else gray
-        if raw.ndim == 3:
-            c = raw.shape[-1]
-            if c == 1:
-                gray = raw[..., 0].astype(np.float32)
-                return np.stack([gray, gray, gray], axis=-1) if mode == 'color' else gray
-            if c >= 3:
-                rgb = raw[..., :3].astype(np.float32)
-                if mode == 'gray':
-                    return (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]).astype(np.float32)
-                return rgb
-        squeezed = np.squeeze(raw)
-        if squeezed.ndim not in (2, 3):
-            raise ValueError(f"Unsupported patch shape {raw.shape}")
-        return prepare_patch(squeezed)
-
-    used = 0
-    missing = []
-    for P, x, y, pw, ph in entries:
-        patch_path = find_patch_file(patch_folder, img_num, P)
-        if patch_path is None:
-            missing.append(P)
-            continue
-        raw = load_raw(patch_path)
-        patch = prepare_patch(raw)
-
-        H, Wp = (patch.shape[:2] if mode == 'color' else patch.shape)
-        if H < ph or Wp < pw:
-            raise ValueError(f"Patch size {patch.shape} smaller than metadata ({ph}, {pw}) for {patch_path}")
-        if H != ph or Wp != pw:
-            patch = (patch[:ph, :pw, :] if mode == 'color' else patch[:ph, :pw])
-
-        if mode == 'color':
-            canvas[y:y+ph, x:x+pw, :] += patch
-        else:
-            canvas[y:y+ph, x:x+pw] += patch
-        weight_map[y:y+ph, x:x+pw] += 1
-        used += 1
-
-    if missing:
-        raise FileNotFoundError(f"Missing patches for img={img_num}, P values: {missing}")
-    if used == 0:
-        raise ValueError(f"No patches were used for reconstruction for img={img_num}.")
-
-    # Normalize and finalize
-    if mode == 'color':
-        reconstructed = canvas / weight_map[..., None]
-        reconstructed = np.clip(reconstructed, 0, 255).astype(np.uint8)
-        return reconstructed if return_as_array else Image.fromarray(reconstructed, mode='RGB')
-    else:
-        reconstructed = canvas / weight_map
-        reconstructed = np.clip(reconstructed, 0, 255).astype(np.uint8)
-        return reconstructed if return_as_array else Image.fromarray(reconstructed, mode='L')
-    
-
-import os
-import re
-
-def count_unique_img_indices(folder):
-    """
-    Scan a folder and return:
-      - set of unique image indices (from 'img=NN' or 'img_NN')
-      - count of unique indices
-      - dict mapping each index -> set of unique base names up to img=NN/img_NN
-      - list of unique base names (deduped), e.g., '..._img=4'
-
-    Example filenames:
-      crypts_..._img=0_P=1.png
-      crypts_..._img=0_P=2.tif
-      crypts_..._img=4_P=6.png
-
-    Unique base names:
-      crypts_..._img=0
-      crypts_..._img=4
-    """
-    # Match img index (img=NN or img_NN)
-    idx_pattern = re.compile(r'img[=_](\d+)')
-    # Capture base up to img=NN/img_NN
-    base_pattern = re.compile(r'^(.*?img[=_]\d+)')
-
-    img_indices = set()
-    names_by_index = {}  # int -> set[str]
-
-    for fname in os.listdir(folder):
-        path = os.path.join(folder, fname)
-        if not os.path.isfile(path):
-            continue
-
-        m_idx = idx_pattern.search(fname)
-        if not m_idx:
-            continue
-
-        idx = int(m_idx.group(1))
-        img_indices.add(idx)
-
-        m_base = base_pattern.match(fname)
-        if m_base:
-            base_name = m_base.group(1)  # e.g., 'crypts_..._img=4'
-            names_by_index.setdefault(idx, set()).add(base_name)
-
-    # Flat list of unique base names (sorted for reproducibility)
-    unique_base_names = sorted({b for bases in names_by_index.values() for b in bases})
-    return img_indices, len(img_indices), names_by_index, unique_base_names
-
-# Example usage:
-# indices, count, names_map, unique_names = count_unique_img_indices("/path/to/folder")
-# print(indices, count)
-# print(unique_names)            # ['..._img=0', '..._img=4']
-# print(names_map.get(0, set())) # {'..._img=0'}
