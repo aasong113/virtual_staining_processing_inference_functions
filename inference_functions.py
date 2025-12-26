@@ -1090,30 +1090,47 @@ def plot_patch_triplets(p1, p2, p3, titles=None, cmap=None):
 
 
 
-def plot_patch_quadrants(p1, p2, p3, p4, titles=None, row_titles=None, cmap=None):
+def plot_patch_quadrants(*patch_lists, titles=None, row_titles=None, cmap=None):
     """
-    Plots patches from four lists in a 4-row grid.
-
     Args:
-        p1, p2, p3, p4 (list of np.ndarray): Lists of patch images.
-        titles (list of str, optional): Titles for each column (shared across rows).
-        row_titles (list of str, optional): Titles for each row.
-        cmap (str or None): Color map to use. If None, will default to 'gray' if image has 1 channel.
+    *patch_lists: any number of lists/tuples of np.ndarray patches.
+                  Each list becomes one row. All lists must have equal length.
+    titles (list of str, optional): Column titles (shared across rows).
+                                    Length must equal number of columns.
+    row_titles (list of str, optional): Row titles, one per patch list.
+                                        Length must equal number of rows.
+    cmap (str or None): Color map to use. If None, will default to 'gray'
+                        for single-channel images, otherwise default colormap.
     """
-    assert len(p1) == len(p2) == len(p3) == len(p4), "All patch lists must have the same length."
-    assert row_titles is None or len(row_titles) == 4, "Row titles must be a list of length 4."
-    
-    n = len(p1)
+    import numpy as np
+    import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(3 * n, 12))  # Adjust height for 4 rows
+    if len(patch_lists) == 0:
+        raise ValueError("Provide at least one list of patches.")
 
-    for i in range(n):
-        for row, patches in enumerate([p1, p2, p3, p4], start=1):
-            idx = (row - 1) * n + i + 1
-            ax = plt.subplot(4, n, idx)
+    rows = len(patch_lists)
+    cols = len(patch_lists[0])
 
-            patch = patches[i]
-            # Determine if grayscale
+    # Validate lengths
+    if any(len(pl) != cols for pl in patch_lists):
+        raise AssertionError("All patch lists must have the same length (number of columns).")
+    if titles is not None and len(titles) != cols:
+        raise AssertionError("titles length must match the number of columns.")
+    if row_titles is not None and len(row_titles) != rows:
+        raise AssertionError("row_titles length must match the number of rows.")
+
+    # Figure size scales with rows and cols (3 inches per column/row)
+    fig, axes = plt.subplots(rows, cols, figsize=(3 * cols, 3 * rows))
+    # Normalize axes to a 2D array of shape (rows, cols)
+    axes = np.atleast_2d(axes).reshape(rows, cols)
+
+    for r in range(rows):
+        patches = patch_lists[r]
+        for c in range(cols):
+            ax = axes[r, c]
+            patch = patches[c]
+
+            # Determine colormap
             if cmap is not None:
                 use_cmap = cmap
             elif patch.ndim == 2 or (patch.ndim == 3 and patch.shape[2] == 1):
@@ -1124,18 +1141,18 @@ def plot_patch_quadrants(p1, p2, p3, p4, titles=None, row_titles=None, cmap=None
 
             ax.imshow(patch, cmap=use_cmap)
             ax.axis('off')
-            if row == 1 and titles:
-                ax.set_title(titles[i], fontsize=10)
 
-            # Set row titles on the first column
-            if i == 0 and row_titles is not None:
-                ax_row_title = plt.subplot(4, n, (row - 1) * n + 1)
-                ax_row_title.set_title(row_titles[row - 1], fontsize=12)
-                ax_row_title.axis('off')  # Hide the axis for row title
-    
+            # Column titles on top row
+            if r == 0 and titles is not None:
+                ax.set_title(titles[c], fontsize=10)
+
+        # Row title on the first column
+        if row_titles is not None:
+            axes[r, 0].set_ylabel(row_titles[r], rotation=90, fontsize=12, va='center')
+
     plt.tight_layout()
     plt.show()
-
+    
 # Example usage
 # Assuming p1, p2, p3, and p4 are defined and contain image data
 # plot_patch_quadrants(p1, p2, p3, p4, titles=["Title1", "Title2", "Title3"], row_titles=["Row Title 1", "Row Title 2", "Row Title 3", "Row Title 4"], cmap='gray')
