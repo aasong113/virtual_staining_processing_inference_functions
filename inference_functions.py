@@ -425,7 +425,7 @@ def plot_pretraining_losses_UVCGANv2(csv_file_path):
     plt.show()
 
 
-def plot_training_losses_UVCGANv2(csv_path):
+def plot_training_losses_UVCGANv2(csv_path, additional_losses = None):
     """
     Reads a CSV file containing training losses and plots each loss component vs. epoch.
 
@@ -439,6 +439,15 @@ def plot_training_losses_UVCGANv2(csv_path):
     epochs = df['epoch']
     loss_keys = ['gen_ab', 'gen_ba', 'cycle_a', 'cycle_b',
                  'disc_a', 'disc_b', 'idt_a', 'idt_b', 'gp_a', 'gp_b']
+    
+        # Handle additional losses
+    if additional_losses is not None:
+        if isinstance(additional_losses, str):
+            loss_keys.append(additional_losses)
+        elif isinstance(additional_losses, list):
+            loss_keys.extend(additional_losses)
+        else:
+            raise ValueError("additional_losses must be a string or list of strings")
 
     # Plot
     plt.figure(figsize=(12, 6))
