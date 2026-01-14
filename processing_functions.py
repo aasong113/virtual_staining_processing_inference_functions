@@ -289,10 +289,7 @@ def combine_trios_to_rgb(bit_folder,green_folder, blue_folder, output_folder):
     def index_folder(folder):
         file_dict = {}
         for fname in os.listdir(folder):
-            key = extract_patch_key(fname)
-
-            if key is None:
-                key = fname  # Fallback to full filename if no key found
+            key = fname  # Fallback to full filename if no key found
             if key:
                 file_dict[key] = os.path.join(folder, fname)
         return file_dict
