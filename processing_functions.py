@@ -289,6 +289,8 @@ def combine_trios_to_rgb(bit_folder,green_folder, blue_folder, output_folder):
     def index_folder(folder):
         file_dict = {}
         for fname in os.listdir(folder):
+            if not fname.lower().endswith(('.tif', '.tiff', '.png')):
+                continue
             key = fname  # Fallback to full filename if no key found
             if key:
                 file_dict[key] = os.path.join(folder, fname)
