@@ -302,8 +302,10 @@ def combine_trios_to_rgb(bit_folder,green_folder, blue_folder, output_folder):
 
     # Find shared keys
     common_keys = set(bit_dict) & set(blue_dict) & set(green_dict)
+    # Only keep trios whose filename contains "BIT"
+    common_keys = {k for k in common_keys if "bit" in k.lower()}
     if not common_keys:
-        print("❌ No matching patch keys found.")
+        print("❌ No matching patch keys found (with 'BIT' in the filename).")
         return
 
     print(f"✅ Found {len(common_keys)} matched image trios.")
