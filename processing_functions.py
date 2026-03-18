@@ -46,6 +46,53 @@ def move_n_random_images(src_folder, dst_folder, n, extensions=('.png', '.jpg', 
         shutil.move(src_path, dst_path)
         print(f"Moved: {filename}")
 
+
+def move_random_percent_tif_images(src_folder, dst_folder, percentage=25, seed=None):
+    """
+    Moves a random percentage of .tif/.tiff images from src_folder to dst_folder.
+
+    Parameters:
+    - src_folder: Path to the folder containing .tif images
+    - dst_folder: Path to the destination folder
+    - percentage: Percentage of images to move (0 < percentage <= 100)
+    - seed: Optional random seed for reproducibility
+
+    Returns:
+    - List of moved filenames
+    """
+    if not (0 < percentage <= 100):
+        raise ValueError("percentage must be > 0 and <= 100")
+
+    os.makedirs(dst_folder, exist_ok=True)
+
+    tif_files = [
+        f for f in os.listdir(src_folder)
+        if f.lower().endswith(('.tif', '.tiff'))
+    ]
+
+    if len(tif_files) == 0:
+        print("No .tif/.tiff images found in source folder.")
+        return []
+
+    fraction = percentage / 100.0
+    n_to_move = int(len(tif_files) * fraction)
+
+    if n_to_move == 0:
+        print(f"Found {len(tif_files)} tif images; {percentage}% rounds down to 0, so nothing was moved.")
+        return []
+
+    rng = random.Random(seed)
+    selected_files = rng.sample(tif_files, n_to_move)
+
+    for filename in selected_files:
+        src_path = os.path.join(src_folder, filename)
+        dst_path = os.path.join(dst_folder, filename)
+        shutil.move(src_path, dst_path)
+        print(f"Moved: {filename}")
+
+    print(f"Moved {len(selected_files)} / {len(tif_files)} tif images ({percentage}%) to: {dst_folder}")
+    return selected_files
+
 def load_crop_parameters(filename):
     crop_params = {}
     with open(filename, "r") as f:
